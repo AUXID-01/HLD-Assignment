@@ -11,6 +11,7 @@ function App() {
   const [showDropdown, setShowDropdown] = useState(false)
 
   const debounceTimer = useRef(null)
+  const inputRef = useRef(null)
 
   useEffect(() => {
     if (!query.trim()) {
@@ -67,6 +68,7 @@ function App() {
       setMessage(data.message)
       setQuery(searchQuery)
       setShowDropdown(false)
+      inputRef.current?.blur()
       
       setTimeout(() => setMessage(null), 3000)
     } catch (err) {
@@ -98,42 +100,89 @@ function App() {
     }
   }
 
+  // Handle clicking outside to close
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (inputRef.current && !inputRef.current.contains(event.target)) {
+        setShowDropdown(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [inputRef])
+
+
   return (
-    <div className="container">
-      <h1>Search Typeahead</h1>
+    <div className="google-container">
+      <div className="logo-container">
+        <span className="logo-g">G</span>
+        <span className="logo-o1">o</span>
+        <span className="logo-o2">o</span>
+        <span className="logo-g2">g</span>
+        <span className="logo-l">l</span>
+        <span className="logo-e">e</span>
+      </div>
       
-      <div className="search-box">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Search..."
-          onFocus={() => setShowDropdown(true)}
-          onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
-        />
-        <button onClick={() => handleSearch(query)}>Search</button>
+      <div className={`search-wrapper ${showDropdown && query.trim() !== '' ? 'dropdown-active' : ''}`} ref={inputRef}>
+        <div className="search-input-container">
+          <svg className="search-icon" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
+          </svg>
+          <input
+            type="text"
+            className="search-input"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={() => {
+              if (query.trim()) setShowDropdown(true)
+            }}
+            placeholder="Search Google or type a URL"
+          />
+          <svg className="mic-icon" focusable="false" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path d="m12 15c1.66 0 3-1.31 3-2.97v-7.02c0-1.66-1.34-3.01-3-3.01s-3 1.34-3 3.01v7.02c0 1.66 1.34 2.97 3 2.97z" fill="#4285f4"></path>
+            <path d="m11 18.08h2v3.92h-2z" fill="#34a853"></path>
+            <path d="m7.05 16.87c-1.27-1.33-2.05-2.8-2.05-4.67h-2c0 2.61 1.15 4.71 2.87 6.27z" fill="#f4b400"></path>
+            <path d="m12 16.93a4.97 5.25 0 0 1 -3.54 -1.55l-1.41 1.49c1.26 1.34 3.02 2.13 4.95 2.13 3.87 0 6.99-2.92 6.99-7h-1.99c0 2.92-2.24 4.93-5 4.93z" fill="#ea4335"></path>
+          </svg>
+        </div>
 
         {showDropdown && query.trim() !== '' && (
-          <ul className="dropdown">
-            {loading && <li className="loading">Loading...</li>}
-            {error && <li className="error">{error}</li>}
-            {!loading && !error && suggestions.length === 0 && (
-              <li className="empty">No results found</li>
-            )}
-            {!loading && !error && suggestions.map((sugg, index) => (
-              <li 
-                key={sugg.query}
-                className={index === highlightedIndex ? 'highlighted' : ''}
-                onClick={() => handleSearch(sugg.query)}
-                onMouseEnter={() => setHighlightedIndex(index)}
-              >
-                <span className="sugg-query">{sugg.query}</span>
-                <span className="sugg-count">{sugg.count}</span>
-              </li>
-            ))}
-          </ul>
+          <div className="dropdown-content">
+            <div className="divider"></div>
+            <ul className="suggestions-list">
+              {loading && <li className="info-item">Loading...</li>}
+              {error && <li className="info-item error">{error}</li>}
+              {!loading && !error && suggestions.length === 0 && (
+                <li className="info-item">No results found</li>
+              )}
+              {!loading && !error && suggestions.map((sugg, index) => (
+                <li 
+                  key={sugg.query}
+                  className={`suggestion-item ${index === highlightedIndex ? 'highlighted' : ''}`}
+                  onClick={() => handleSearch(sugg.query)}
+                  onMouseEnter={() => setHighlightedIndex(index)}
+                >
+                  <div className="sugg-icon">
+                    <svg focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                      <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"></path>
+                    </svg>
+                  </div>
+                  <div className="sugg-query-text">
+                    <span className="sugg-match">{sugg.query.substring(0, query.length)}</span>
+                    <span>{sugg.query.substring(query.length)}</span>
+                  </div>
+                  <span className="sugg-count">{sugg.count}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
+      </div>
+
+      <div className="action-buttons">
+        <button onClick={() => handleSearch(query)}>Google Search</button>
+        <button onClick={() => handleSearch(query)}>I'm Feeling Lucky</button>
       </div>
 
       {message && <div className="toast">{message}</div>}
