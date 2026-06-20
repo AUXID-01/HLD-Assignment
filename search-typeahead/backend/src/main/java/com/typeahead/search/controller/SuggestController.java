@@ -2,6 +2,7 @@ package com.typeahead.search.controller;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.typeahead.search.component.ConsistentHashRouter;
 import com.typeahead.search.dto.SuggestResponse;
 import com.typeahead.search.repository.QueryRepository;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -19,12 +20,12 @@ import java.util.stream.Collectors;
 public class SuggestController {
 
     private final QueryRepository queryRepository;
-    private final StringRedisTemplate redisTemplate;
+    private final ConsistentHashRouter hashRouter;
     private final ObjectMapper objectMapper;
 
-    public SuggestController(QueryRepository queryRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
+    public SuggestController(QueryRepository queryRepository, ConsistentHashRouter hashRouter, ObjectMapper objectMapper) {
         this.queryRepository = queryRepository;
-        this.redisTemplate = redisTemplate;
+        this.hashRouter = hashRouter;
         this.objectMapper = objectMapper;
     }
 
@@ -37,11 +38,18 @@ public class SuggestController {
         String normalizedPrefix = prefix.trim().toLowerCase();
         String redisKey = "suggest:" + normalizedPrefix;
 
+        // Route to the deterministically correct node via the consistent hash ring
+        StringRedisTemplate template = hashRouter.getTemplateForKey(redisKey);
+        String nodeName = hashRouter.getNodeNameForKey(redisKey);
+
         try {
-            String cachedData = redisTemplate.opsForValue().get(redisKey);
+            String cachedData = template.opsForValue().get(redisKey);
             if (cachedData != null) {
                 List<SuggestResponse> responses = objectMapper.readValue(cachedData, new TypeReference<>() {});
-                return ResponseEntity.ok().header("X-Cache", "HIT").body(responses);
+                return ResponseEntity.ok()
+                        .header("X-Cache", "HIT")
+                        .header("X-Cache-Node", nodeName)
+                        .body(responses);
             }
         } catch (Exception e) {
             // Ignore cache read errors and fallback to DB
@@ -54,11 +62,14 @@ public class SuggestController {
 
         try {
             String json = objectMapper.writeValueAsString(dbResults);
-            redisTemplate.opsForValue().set(redisKey, json, Duration.ofSeconds(60));
+            template.opsForValue().set(redisKey, json, Duration.ofSeconds(60));
         } catch (Exception e) {
             // Ignore cache write errors
         }
 
-        return ResponseEntity.ok().header("X-Cache", "MISS").body(dbResults);
+        return ResponseEntity.ok()
+                .header("X-Cache", "MISS")
+                .header("X-Cache-Node", nodeName)
+                .body(dbResults);
     }
 }

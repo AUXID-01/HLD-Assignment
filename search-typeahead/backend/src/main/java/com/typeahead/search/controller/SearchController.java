@@ -1,5 +1,6 @@
 package com.typeahead.search.controller;
 
+import com.typeahead.search.component.ConsistentHashRouter;
 import com.typeahead.search.repository.QueryRepository;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.ResponseEntity;
@@ -16,35 +17,49 @@ import java.util.Map;
 public class SearchController {
 
     private final QueryRepository queryRepository;
-    private final StringRedisTemplate redisTemplate;
+    private final ConsistentHashRouter hashRouter;
 
-    public SearchController(QueryRepository queryRepository, StringRedisTemplate redisTemplate) {
+    public SearchController(QueryRepository queryRepository, ConsistentHashRouter hashRouter) {
         this.queryRepository = queryRepository;
-        this.redisTemplate = redisTemplate;
+        this.hashRouter = hashRouter;
     }
 
     @PostMapping("/search")
     public ResponseEntity<Map<String, String>> search(@RequestBody Map<String, String> request) {
         String queryStr = request.get("query");
-        
+
         if (queryStr == null || queryStr.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "query cannot be missing or blank"));
         }
 
-        // Case-insensitive exact match logic: 
-        // We trim and lowercase the query so it's safely and consistently stored in the DB.
         queryStr = queryStr.trim().toLowerCase();
 
-        // Performs a single atomic DB operation via native UPSERT.
+        // Performs a single atomic DB UPSERT
         queryRepository.upsertSearchQuery(queryStr, new Timestamp(System.currentTimeMillis()));
 
         // Cache Invalidation Strategy:
-        // We delete all possible prefix keys for this specific query up to its full length.
-        List<String> keysToDelete = new ArrayList<>();
+        // For each prefix of the query string, ask the ring which node owns it,
+        // and delete that key from the correct node.
+        // Each prefix can live on a DIFFERENT node, so we must route per-key.
+        List<String> prefixes = new ArrayList<>();
         for (int i = 1; i <= queryStr.length(); i++) {
-            keysToDelete.add("suggest:" + queryStr.substring(0, i));
+            prefixes.add("suggest:" + queryStr.substring(0, i));
         }
-        redisTemplate.delete(keysToDelete);
+
+        // Group deletes by node to minimize round-trips
+        Map<String, List<String>> keysByNode = new java.util.HashMap<>();
+        for (String key : prefixes) {
+            String nodeName = hashRouter.getNodeNameForKey(key);
+            keysByNode.computeIfAbsent(nodeName, k -> new ArrayList<>()).add(key);
+        }
+
+        Map<String, StringRedisTemplate> allTemplates = hashRouter.getAllTemplates();
+        for (Map.Entry<String, List<String>> entry : keysByNode.entrySet()) {
+            StringRedisTemplate template = allTemplates.get(entry.getKey());
+            if (template != null) {
+                template.delete(entry.getValue());
+            }
+        }
 
         return ResponseEntity.ok(Map.of("message", "Searched"));
     }

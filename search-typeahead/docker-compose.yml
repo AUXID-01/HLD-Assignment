@@ -13,15 +13,35 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
-  redis:
+  redis-node-1:
     image: redis:7-alpine
-    container_name: typeahead-redis
+    container_name: typeahead-redis-1
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - redis_data_1:/data
+    restart: unless-stopped
+
+  redis-node-2:
+    image: redis:7-alpine
+    container_name: typeahead-redis-2
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data_2:/data
+    restart: unless-stopped
+
+  redis-node-3:
+    image: redis:7-alpine
+    container_name: typeahead-redis-3
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_data_3:/data
     restart: unless-stopped
 
 volumes:
   postgres_data:
-  redis_data:
+  redis_data_1:
+  redis_data_2:
+  redis_data_3:
