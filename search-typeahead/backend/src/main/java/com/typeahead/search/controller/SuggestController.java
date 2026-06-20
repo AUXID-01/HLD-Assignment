@@ -1,28 +1,64 @@
 package com.typeahead.search.controller;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.typeahead.search.dto.SuggestResponse;
 import com.typeahead.search.repository.QueryRepository;
-import com.typeahead.search.repository.QueryRepository.SuggestProjection;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @RestController
 public class SuggestController {
 
     private final QueryRepository queryRepository;
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
 
-    public SuggestController(QueryRepository queryRepository) {
+    public SuggestController(QueryRepository queryRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
         this.queryRepository = queryRepository;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     @GetMapping("/suggest")
-    public List<SuggestProjection> suggest(@RequestParam(name = "q", required = false) String prefix) {
+    public ResponseEntity<List<SuggestResponse>> suggest(@RequestParam(name = "q", required = false) String prefix) {
         if (prefix == null || prefix.trim().isEmpty()) {
-            return Collections.emptyList();
+            return ResponseEntity.ok().header("X-Cache", "MISS").body(Collections.emptyList());
         }
-        return queryRepository.findTop10ByQueryStartingWithIgnoreCaseOrderByCountDesc(prefix);
+
+        String normalizedPrefix = prefix.trim().toLowerCase();
+        String redisKey = "suggest:" + normalizedPrefix;
+
+        try {
+            String cachedData = redisTemplate.opsForValue().get(redisKey);
+            if (cachedData != null) {
+                List<SuggestResponse> responses = objectMapper.readValue(cachedData, new TypeReference<>() {});
+                return ResponseEntity.ok().header("X-Cache", "HIT").body(responses);
+            }
+        } catch (Exception e) {
+            // Ignore cache read errors and fallback to DB
+        }
+
+        List<SuggestResponse> dbResults = queryRepository.findTop10ByQueryStartingWithIgnoreCaseOrderByCountDesc(normalizedPrefix)
+                .stream()
+                .map(p -> new SuggestResponse(p.getQuery(), p.getCount()))
+                .collect(Collectors.toList());
+
+        try {
+            String json = objectMapper.writeValueAsString(dbResults);
+            redisTemplate.opsForValue().set(redisKey, json, Duration.ofSeconds(60));
+        } catch (Exception e) {
+            // Ignore cache write errors
+        }
+
+        return ResponseEntity.ok().header("X-Cache", "MISS").body(dbResults);
     }
 }
