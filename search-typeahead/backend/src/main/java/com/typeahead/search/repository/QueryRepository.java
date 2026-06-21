@@ -41,4 +41,21 @@ public interface QueryRepository extends JpaRepository<Query, Long> {
         "INSERT INTO queries (query, count, last_searched_at) VALUES (:query, 1, :lastSearchedAt) " +
         "ON CONFLICT (query) DO UPDATE SET count = queries.count + 1, last_searched_at = EXCLUDED.last_searched_at")
     void upsertSearchQuery(@Param("query") String query, @Param("lastSearchedAt") Timestamp lastSearchedAt);
+
+    /**
+     * Batch-aware UPSERT: applies an aggregated count delta (N searches buffered since last flush)
+     * and the latest observed timestamp in a single DB round-trip.
+     * GREATEST() ensures last_searched_at is never rolled backward if two flushes overlap.
+     */
+    @Modifying
+    @Transactional
+    @org.springframework.data.jpa.repository.Query(nativeQuery = true, value =
+        "INSERT INTO queries (query, count, last_searched_at) VALUES (:query, :incrementCount, :lastSearchedAt) " +
+        "ON CONFLICT (query) DO UPDATE SET " +
+        "count = queries.count + :incrementCount, " +
+        "last_searched_at = GREATEST(queries.last_searched_at, EXCLUDED.last_searched_at)")
+    void batchUpsertSearchQuery(
+        @Param("query") String query,
+        @Param("incrementCount") long incrementCount,
+        @Param("lastSearchedAt") Timestamp lastSearchedAt);
 }

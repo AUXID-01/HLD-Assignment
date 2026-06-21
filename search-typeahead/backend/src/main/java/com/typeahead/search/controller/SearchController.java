@@ -1,27 +1,32 @@
 package com.typeahead.search.controller;
 
-import com.typeahead.search.component.ConsistentHashRouter;
-import com.typeahead.search.repository.QueryRepository;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import com.typeahead.search.component.BatchFlusher;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 
+/**
+ * Handles POST /search.
+ *
+ * Phase 9 change: the synchronous DB UPSERT + cache invalidation that ran
+ * inline on every request has been replaced by a single call to
+ * BatchFlusher.record(). The HTTP response is returned immediately without
+ * waiting for the DB write, which is now deferred to the next batch flush.
+ *
+ * The /search response contract is UNCHANGED from the user's perspective:
+ *   • Still returns { "message": "Searched" } with HTTP 200.
+ *   • Still returns 400 for blank/missing query.
+ */
 @RestController
 public class SearchController {
 
-    private final QueryRepository queryRepository;
-    private final ConsistentHashRouter hashRouter;
+    private final BatchFlusher batchFlusher;
 
-    public SearchController(QueryRepository queryRepository, ConsistentHashRouter hashRouter) {
-        this.queryRepository = queryRepository;
-        this.hashRouter = hashRouter;
+    public SearchController(BatchFlusher batchFlusher) {
+        this.batchFlusher = batchFlusher;
     }
 
     @PostMapping("/search")
@@ -34,34 +39,9 @@ public class SearchController {
 
         queryStr = queryStr.trim().toLowerCase();
 
-        // Performs a single atomic DB UPSERT
-        queryRepository.upsertSearchQuery(queryStr, new Timestamp(System.currentTimeMillis()));
-
-        // Cache Invalidation Strategy:
-        // For each prefix of the query string, ask the ring which node owns it,
-        // and delete that key from the correct node.
-        // Each prefix can live on a DIFFERENT node, so we must route per-key.
-        List<String> prefixes = new ArrayList<>();
-        for (int i = 1; i <= queryStr.length(); i++) {
-            String prefix = queryStr.substring(0, i);
-            prefixes.add("suggest:basic:" + prefix);
-            prefixes.add("suggest:trending:" + prefix);
-        }
-
-        // Group deletes by node to minimize round-trips
-        Map<String, List<String>> keysByNode = new java.util.HashMap<>();
-        for (String key : prefixes) {
-            String nodeName = hashRouter.getNodeNameForKey(key);
-            keysByNode.computeIfAbsent(nodeName, k -> new ArrayList<>()).add(key);
-        }
-
-        Map<String, StringRedisTemplate> allTemplates = hashRouter.getAllTemplates();
-        for (Map.Entry<String, List<String>> entry : keysByNode.entrySet()) {
-            StringRedisTemplate template = allTemplates.get(entry.getKey());
-            if (template != null) {
-                template.delete(entry.getValue());
-            }
-        }
+        // Buffer the search event. The HTTP thread returns immediately;
+        // the DB UPSERT and cache invalidation happen asynchronously on flush.
+        batchFlusher.record(queryStr);
 
         return ResponseEntity.ok(Map.of("message", "Searched"));
     }
