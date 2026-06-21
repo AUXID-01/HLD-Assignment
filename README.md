@@ -260,6 +260,39 @@ Returns which Redis node the consistent hash ring routes `suggest:basic:iphone` 
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    Client[React Frontend]
+
+    subgraph Spring Boot Backend
+        Suggest[SuggestController]
+        Search[SearchController]
+        HashRing[ConsistentHashRouter]
+        Buffer[SearchBuffer]
+        Flush[BatchFlusher]
+    end
+
+    subgraph Infrastructure
+        Redis1[(Redis Node 1)]
+        Redis2[(Redis Node 2)]
+        Redis3[(Redis Node 3)]
+        DB[(PostgreSQL)]
+    end
+
+    %% Read Path
+    Client -- "GET /suggest" --> Suggest
+    Suggest -- "find node" --> HashRing
+    HashRing -.-> Redis1 & Redis2 & Redis3
+    Suggest -- "Cache MISS" --> DB
+
+    %% Write Path
+    Client -- "POST /search" --> Search
+    Search -- "add(query)" --> Buffer
+    Flush -- "@Scheduled drain" --> Buffer
+    Flush -- "Batch UPSERT" --> DB
+    Flush -- "Invalidate keys" --> HashRing
+```
+
 ### Components
 
 | Component | Technology | Role |
