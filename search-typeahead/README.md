@@ -1,228 +1,201 @@
-# 🔍 Search Typeahead System
+# Search Typeahead System
 
-A full-stack, production-inspired **Search Typeahead / Autocomplete** system built as a High-Level Design (HLD) assignment. The system demonstrates a real-world architecture with progressive complexity — from a simple REST API to distributed caching, consistent hashing, recency-aware ranking, and batched writes.
-
----
-
-## 📐 Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     React Frontend (Vite)                       │
-│   http://localhost:5173  — Google-style search UI               │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │ HTTP (REST)
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│               Spring Boot Backend  :8081                        │
-│                                                                 │
-│   GET  /suggest?q=<prefix>&mode=basic|trending                  │
-│        └─► Consistent Hash Ring (MD5, 160 vnodes/node)          │
-│            └─► Redis Node 1/2/3 (cache-aside, TTL 60s)          │
-│                └─► PostgreSQL (on cache MISS)                   │
-│                                                                 │
-│   POST /search  { "query": "..." }                              │
-│        └─► In-Memory Batch Buffer (ConcurrentHashMap)           │
-│            └─► @Scheduled flush every 10s (or 500 entries)      │
-│                └─► Batch UPSERT → PostgreSQL                    │
-│                └─► Cache invalidation (both modes, all prefixes)│
-│                                                                 │
-│   GET  /batch/debug   — write reduction metrics                 │
-│   GET  /cache/debug   — ring routing & cache state              │
-└─────────────────────────────────────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-   Redis Node 1     Redis Node 2     Redis Node 3
-     :6379             :6380             :6381
-          └───────────────┴───────────────┘
-                          │
-                          ▼
-                    PostgreSQL :5432
-                   (typeahead DB)
-```
+A production-inspired **search autocomplete system** built as a High-Level Design (HLD) assignment. It implements the full stack — from a PostgreSQL-backed prefix search with 1.24M+ queries, through a distributed Redis cache layer with consistent hashing, to a React frontend with debounced typeahead. Write throughput is optimized via an in-memory batch buffer that collapses high-frequency searches into periodic bulk UPSERTs, reducing DB load by 6–10× in testing.
 
 ---
 
-## 🧩 Implementation Phases
+## Tech Stack
 
-| Phase | Feature |
-|-------|---------|
-| 1 | Project skeleton (Spring Boot + PostgreSQL + JPA) |
-| 2 | Dataset loading from CSV (`queries_aggregated.csv`) |
-| 3 | `GET /suggest` — prefix search, sorted by count |
-| 4 | `POST /search` — atomic UPSERT (insert or increment) |
-| 5 | Redis cache-aside (single node, 60s TTL) |
-| 6 | 3-node Redis + Consistent Hashing (MD5, 160 virtual nodes) |
-| 7 | React Frontend (Google-style UI, debounced, keyboard nav) |
-| 8 | Trending/Recency ranking (exponential decay scoring) |
-| 9 | Batch writes (in-memory buffer, `@Scheduled` flush) |
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| Backend | Spring Boot | 3.2.6 |
+| Language | Java | 17 |
+| Database | PostgreSQL (Docker image `postgres:15-alpine`) | 15 |
+| Cache | Redis (Docker image `redis:7-alpine`) | 7 |
+| Frontend | React | 19.2.6 |
+| Frontend tooling | Vite | 8.0.12 |
+| ORM | Spring Data JPA / Hibernate | 6.4.8 (via Boot 3.2.6) |
+| Redis client | Spring Data Redis / Lettuce | (via Boot 3.2.6) |
+| Build | Maven | 3.8+ |
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
-Make sure you have all of these installed before starting:
-
-| Tool | Minimum Version | Check Command |
-|------|----------------|---------------|
-| Java (JDK) | 17+ | `java -version` |
+| Tool | Required Version | How to check |
+|------|-----------------|-------------|
+| Docker Desktop | Any recent | `docker --version` |
+| Java JDK | 17+ | `java -version` |
 | Maven | 3.8+ | `mvn -version` |
-| Node.js | 18+ | `node -version` |
-| npm | 9+ | `npm -version` |
-| Docker Desktop | Any recent | `docker -version` |
+| Node.js | 18+ | `node --version` |
+| npm | 9+ | `npm --version` |
 
 ---
 
-## 🚀 Quick Start (Step-by-Step)
+## Setup Instructions
 
-### Step 1 — Clone the Repository
+### 1 — Clone the repository
 
 ```bash
 git clone https://github.com/AUXID-01/HLD-Assignment.git
 cd HLD-Assignment/search-typeahead
 ```
 
-### Step 2 — Start Infrastructure (PostgreSQL + 3 Redis Nodes)
+### 2 — Start infrastructure (PostgreSQL + 3 Redis nodes)
 
 ```bash
 docker-compose up -d
 ```
 
-This starts 4 containers:
+This starts four containers:
 
-| Container | Service | Port |
-|-----------|---------|------|
+| Container | Service | Host Port |
+|-----------|---------|-----------|
 | `typeahead-postgres` | PostgreSQL 15 | `5432` |
 | `typeahead-redis-1` | Redis 7 | `6379` |
 | `typeahead-redis-2` | Redis 7 | `6380` |
 | `typeahead-redis-3` | Redis 7 | `6381` |
 
-Verify containers are running:
+Confirm all four are running:
 ```bash
 docker ps
 ```
 
-### Step 3 — Start the Backend
+### 3 — Start the backend
 
 ```bash
 cd backend
 mvn spring-boot:run
 ```
 
-Wait until you see:
+Wait for the log line:
 ```
 Started SearchApplication in X.XXX seconds
 ```
 
-> **First run only:** The app auto-loads the query dataset from `src/main/resources/data/queries_aggregated.csv` into PostgreSQL. This takes a few seconds. Subsequent runs skip this step.
+The backend listens on **http://localhost:8081**.
 
-The backend runs on **http://localhost:8081**.
+> **First boot only:** `DataLoader` automatically reads `queries_aggregated.csv` from the classpath and bulk-inserts rows into PostgreSQL in batches of 10,000. This takes a few seconds. On every subsequent boot, it detects that the table is non-empty and skips loading entirely.
 
-### Step 4 — Start the Frontend
+### 4 — Start the frontend
 
 Open a **second terminal**:
 
 ```bash
 cd frontend
-npm install      # only needed once
+npm install      # first time only
 npm run dev
 ```
 
 The frontend runs on **http://localhost:5173**.
 
-Open your browser at **http://localhost:5173** and start typing!
+Open your browser at **http://localhost:5173** and start typing.
 
 ---
 
-## ⚙️ Configuration
+## Dataset
 
-All configurable values live in [`backend/src/main/resources/application.properties`](backend/src/main/resources/application.properties):
+### Source
+`backend/src/main/resources/data/queries_aggregated.csv` — a pre-aggregated extract of anonymized search queries with their historical counts and timestamps.
+
+### CSV Schema
+
+```
+query,count,last_searched_at
+"iphone 13",4821,2024-03-15 14:23:00
+playstation 5,3107,2024-03-10 09:41:00
+...
+```
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `query` | string | The search term (may contain commas; outer-quoted if so) |
+| `count` | integer | Cumulative all-time search count |
+| `last_searched_at` | `yyyy-MM-dd HH:mm:ss` | Timestamp of the most recent search event |
+
+### Auto-loading behaviour (`DataLoader.java`)
+
+On startup, `DataLoader` (a `CommandLineRunner`) runs:
+
+```java
+if (queryRepository.count() > 0) {
+    // table already populated — skip
+    return;
+}
+// Otherwise: batch-insert from CSV in chunks of 10,000 rows
+```
+
+The insert SQL is:
+```sql
+INSERT INTO queries (query, count, last_searched_at) VALUES (?, ?, ?)
+ON CONFLICT (query) DO NOTHING
+```
+
+### Pointing at a different dataset
+
+Change the path in `application.properties`:
 
 ```properties
-# Server
-server.port=8081
+# Default (classpath resource):
+app.dataset.path=classpath:data/queries_aggregated.csv
 
-# PostgreSQL
-spring.datasource.url=jdbc:postgresql://localhost:5432/typeahead
-spring.datasource.username=postgres
-spring.datasource.password=postgres
+# Absolute file on disk:
+app.dataset.path=file:/path/to/your/custom.csv
+```
 
-# Redis Nodes (Consistent Hashing)
-redis.nodes[0].host=localhost
-redis.nodes[0].port=6379
-redis.nodes[0].name=redis-node-1
-
-redis.nodes[1].host=localhost
-redis.nodes[1].port=6380
-redis.nodes[1].name=redis-node-2
-
-redis.nodes[2].host=localhost
-redis.nodes[2].port=6381
-redis.nodes[2].name=redis-node-3
-
-# Batch Write Tuning
-batch.flush-interval-ms=10000   # flush every 10 seconds
-batch.flush-size=500            # or immediately if buffer hits 500 entries
+The CSV must match the three-column schema above (header row required). To force a reload after changing the dataset, truncate the table first:
+```sql
+TRUNCATE TABLE queries;
 ```
 
 ---
 
-## 📡 API Reference
+## API Reference
 
-### `GET /suggest`
+### `GET /suggest` — Autocomplete suggestions
 
-Returns up to 10 autocomplete suggestions for a given prefix.
+Returns up to 10 matching queries for a given prefix.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `q` | string | yes | Search prefix (e.g. `"iph"`) |
-| `mode` | string | no | `basic` (default) or `trending` |
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `q` | string | yes | — | Search prefix (e.g. `"iph"`) |
+| `mode` | string | no | `basic` | `basic` = sorted by `count DESC`; `trending` = exponential decay score |
 
-**Basic mode** — sorted by all-time search count (descending).
-
-**Trending mode** — sorted by exponential decay score:
-```
-score = count × e^(−0.0289 × hours_since_last_searched)
-```
-A 24-hour half-life means a query not searched in 24h retains only 50% of its score.
-
-**Example:**
+**Basic mode** — straight `count DESC`, identical to the pre-Phase-8 behaviour:
 ```bash
-# Basic (default)
 curl "http://localhost:8081/suggest?q=iph"
-
-# Trending
-curl "http://localhost:8081/suggest?q=iph&mode=trending"
 ```
-
-**Response (basic):**
 ```json
 [
-  { "query": "iphone 13", "count": 4821, "score": null },
+  { "query": "iphone 13",     "count": 4821, "score": null },
   { "query": "iphone 15 pro", "count": 3107, "score": null }
 ]
 ```
 
-**Response (trending):**
+**Trending mode** — scored by `count × e^(−0.0289 × hours_since_last_searched)`:
+```bash
+curl "http://localhost:8081/suggest?q=iph&mode=trending"
+```
 ```json
 [
   { "query": "iphone 15 pro", "count": 3107, "score": 3094.23 },
-  { "query": "iphone 13", "count": 4821, "score": 12.07 }
+  { "query": "iphone 13",     "count": 4821, "score": 12.07 }
 ]
 ```
 
-**Response Headers:**
+**Response headers (cache observability):**
 ```
 X-Cache: HIT | MISS
 X-Cache-Node: redis-node-1 | redis-node-2 | redis-node-3
 ```
 
+Cache keys: `suggest:basic:<prefix>` and `suggest:trending:<prefix>` — separate keys per mode, both with a **60-second TTL**.
+
 ---
 
-### `POST /search`
+### `POST /search` — Record a search event
 
-Records a user search. Updates the database (batched) and invalidates the cache.
+Buffers the query in memory; the actual DB UPSERT runs on the next scheduled flush (every 10 s, or immediately when the buffer reaches 500 unique entries).
 
 ```bash
 curl -X POST http://localhost:8081/search \
@@ -230,29 +203,32 @@ curl -X POST http://localhost:8081/search \
   -d '{"query": "iphone 15"}'
 ```
 
-**Response:**
+**Success (HTTP 200):**
 ```json
 { "message": "Searched" }
 ```
 
-**Error (blank query):**
+**Validation error — blank or missing `query` (HTTP 400):**
 ```json
 { "error": "query cannot be missing or blank" }
 ```
 
-> **How it works (Phase 9):** The request returns instantly. The query is added to an in-memory buffer. Every 10 seconds (or when the buffer reaches 500 entries), a background thread flushes all buffered queries to PostgreSQL in a single batch UPSERT per unique query — reducing DB load significantly under high traffic.
+The response always returns before any DB write occurs. The underlying UPSERT when the flush runs:
+```sql
+INSERT INTO queries (query, count, last_searched_at)
+VALUES (:query, :incrementCount, :lastSearchedAt)
+ON CONFLICT (query) DO UPDATE SET
+  count = queries.count + :incrementCount,
+  last_searched_at = GREATEST(queries.last_searched_at, EXCLUDED.last_searched_at)
+```
 
 ---
 
-### `GET /batch/debug`
-
-Observe the write-reduction effectiveness of batch buffering.
+### `GET /batch/debug` — Batch write metrics
 
 ```bash
 curl "http://localhost:8081/batch/debug"
 ```
-
-**Response:**
 ```json
 {
   "currentBufferSize": 5,
@@ -263,184 +239,102 @@ curl "http://localhost:8081/batch/debug"
 }
 ```
 
+| Field | Meaning |
+|-------|---------|
+| `currentBufferSize` | Unique queries currently buffered (unflushed) |
+| `totalSearchesReceived` | Cumulative POST /search calls since startup |
+| `totalDbWrites` | Cumulative UPSERTs executed since startup |
+| `writeReductionRatio` | `totalSearchesReceived / totalDbWrites` |
+
 ---
 
-### `GET /cache/debug`
-
-Inspect which Redis node owns a given key and whether it's currently cached.
+### `GET /cache/debug` — Cache ring diagnostic
 
 ```bash
 curl "http://localhost:8081/cache/debug?prefix=iphone"
 ```
 
----
-
-## 🖥️ Frontend Usage
-
-Open **http://localhost:5173** in your browser.
-
-| Action | How |
-|--------|-----|
-| Get suggestions | Start typing in the search box |
-| Navigate suggestions | `↑` / `↓` arrow keys |
-| Select suggestion | `Enter` or click it |
-| Submit typed query | `Enter` (with no suggestion highlighted) or click **Google Search** |
-| Close dropdown | `Escape` |
-| Switch ranking mode | Click **Basic Mode** or **Trending Mode** toggle above the search bar |
-
-The search count `(N)` is always shown. In Trending Mode, the decay score `⭐ X.XX` is shown alongside it so you can visually compare ranking differences.
+Returns which Redis node the consistent hash ring routes `suggest:basic:iphone` and `suggest:trending:iphone` to, and whether the key is currently cached.
 
 ---
 
-## 🧪 Testing the System
+## Architecture
 
-### Test 1 — Verify Suggestions Work
+### Components
 
-```bash
-curl "http://localhost:8081/suggest?q=play"
-```
+| Component | Technology | Role |
+|-----------|-----------|------|
+| React Frontend | React 19 + Vite 8 | Google-style search UI; debounced typeahead (300 ms), keyboard navigation, basic/trending mode toggle |
+| Spring Boot Backend | Java 17, Spring Boot 3.2.6 | REST API, cache-aside logic, batch buffer, consistent hash routing |
+| PostgreSQL | postgres:15-alpine | Persistent store for all query terms, counts, and timestamps |
+| Redis ×3 | redis:7-alpine | Distributed suggestion cache; keys partitioned across 3 nodes via consistent hashing |
 
-Expected: list of queries starting with "play" (e.g. "playstation", "player", etc.)
+### Read path (`GET /suggest`)
 
-### Test 2 — Verify Cache (HIT vs MISS)
+1. Frontend fires `GET /suggest?q=<prefix>&mode=<mode>` after 300 ms debounce.
+2. Backend normalises prefix to lowercase, constructs cache key `suggest:<mode>:<prefix>`.
+3. `ConsistentHashRouter` (MD5 hash, 160 virtual nodes/physical node) deterministically picks one of the 3 Redis nodes.
+4. **Cache HIT** → return JSON directly from Redis (`X-Cache: HIT`).
+5. **Cache MISS** → query PostgreSQL, write result to Redis with 60 s TTL, return result (`X-Cache: MISS`).
 
-```bash
-# First call → MISS (hits DB, writes to Redis)
-curl -v "http://localhost:8081/suggest?q=play" 2>&1 | grep "X-Cache"
-# X-Cache: MISS
+### Write path (`POST /search`)
 
-# Second call → HIT (served from Redis)
-curl -v "http://localhost:8081/suggest?q=play" 2>&1 | grep "X-Cache"
-# X-Cache: HIT
-```
-
-### Test 3 — Verify Cache Invalidation
-
-```bash
-# 1. Prime the cache
-curl "http://localhost:8081/suggest?q=samsung"
-
-# 2. Search "samsung" (buffers the write)
-curl -X POST http://localhost:8081/search -H "Content-Type: application/json" -d '{"query":"samsung"}'
-
-# 3. Wait 10s for flush, then check suggest — should be a MISS again (cache was invalidated)
-curl -v "http://localhost:8081/suggest?q=samsung" 2>&1 | grep "X-Cache"
-```
-
-### Test 4 — Verify Batch Write Reduction
-
-```powershell
-# Fire 30 searches, then immediately check debug (writes should still be 0 or low)
-for ($i = 0; $i -lt 30; $i++) {
-    Invoke-RestMethod -Uri "http://localhost:8081/search" -Method Post `
-        -ContentType "application/json" -Body '{"query": "xbox"}'
-}
-Invoke-RestMethod -Uri "http://localhost:8081/batch/debug" -Method Get
-
-# Wait 12s, check again — buffer should be 0, DB writes increased by just 1
-Start-Sleep -Seconds 12
-Invoke-RestMethod -Uri "http://localhost:8081/batch/debug" -Method Get
-```
-
-Expected: 30 searches collapsed into **1 DB write**.
-
-### Test 5 — Compare Basic vs Trending
-
-```bash
-# Search "iphone 15" several times to boost its recency score
-for i in {1..5}; do
-  curl -s -X POST http://localhost:8081/search \
-    -H "Content-Type: application/json" \
-    -d '{"query":"iphone 15"}'
-done
-
-# Wait for flush (10s), then compare
-curl "http://localhost:8081/suggest?q=iphone&mode=basic"
-curl "http://localhost:8081/suggest?q=iphone&mode=trending"
-```
-
-"iphone 15" should appear higher in trending mode than in basic mode.
+1. Frontend POSTs `{ "query": "..." }` on Enter / suggestion click.
+2. `SearchController` normalises the string and calls `BatchFlusher.record()`.
+3. Query is added to an `AtomicReference<ConcurrentHashMap<String, BufferedEntry>>` in-memory buffer (HTTP thread returns `{ "message": "Searched" }` immediately).
+4. A `@Scheduled` thread flushes every 10 s (configurable via `batch.flush-interval-ms`), or immediately if the buffer reaches 500 entries (`batch.flush-size`).
+5. On flush: one UPSERT per unique query with the aggregated count delta, then Redis cache-key deletions for every prefix of the query in both `basic` and `trending` namespaces.
 
 ---
 
-## 📁 Project Structure
+## Configuration Reference
 
-```
-search-typeahead/
-├── docker-compose.yml              # PostgreSQL + 3 Redis nodes
-│
-├── backend/                        # Spring Boot application
-│   ├── pom.xml
-│   └── src/main/java/com/typeahead/search/
-│       ├── SearchApplication.java          # Main class (@EnableScheduling)
-│       ├── entity/
-│       │   └── Query.java                  # JPA entity (id, query, count, last_searched_at)
-│       ├── repository/
-│       │   └── QueryRepository.java        # JPA repo + native UPSERT queries
-│       ├── dto/
-│       │   └── SuggestResponse.java        # Response shape (query, count, score)
-│       ├── config/
-│       │   ├── RedisConfig.java            # One StringRedisTemplate per Redis node
-│       │   ├── RedisProperties.java        # Typed config (redis.nodes[])
-│       │   └── WebConfig.java              # CORS (allows localhost:5173)
-│       ├── component/
-│       │   ├── ConsistentHashRouter.java   # MD5 ring, 160 vnodes/node
-│       │   ├── DataLoader.java             # CSV → PostgreSQL on first boot
-│       │   ├── BufferedEntry.java          # AtomicLong count + volatile timestamp
-│       │   ├── SearchBuffer.java           # AtomicReference<ConcurrentHashMap> buffer
-│       │   └── BatchFlusher.java           # @Scheduled flush + size threshold flush
-│       └── controller/
-│           ├── SuggestController.java      # GET /suggest (cache-aside, mode routing)
-│           ├── SearchController.java       # POST /search (delegates to BatchFlusher)
-│           ├── BatchDebugController.java   # GET /batch/debug
-│           └── DebugController.java        # GET /cache/debug
-│
-└── frontend/                       # React + Vite application
-    ├── package.json
-    └── src/
-        ├── main.jsx
-        ├── App.jsx                 # Search component (debounced, keyboard nav, mode toggle)
-        └── App.css                 # Google-style UI
+```properties
+# application.properties
+server.port=8081
+
+spring.datasource.url=jdbc:postgresql://localhost:5432/typeahead
+spring.datasource.username=postgres
+spring.datasource.password=postgres
+
+# Redis nodes
+redis.nodes[0].host=localhost  redis.nodes[0].port=6379  redis.nodes[0].name=redis-node-1
+redis.nodes[1].host=localhost  redis.nodes[1].port=6380  redis.nodes[1].name=redis-node-2
+redis.nodes[2].host=localhost  redis.nodes[2].port=6381  redis.nodes[2].name=redis-node-3
+
+# Batch write tuning
+batch.flush-interval-ms=10000   # time-based flush interval (ms)
+batch.flush-size=500            # size-based flush threshold (unique queries)
+
+# Dataset path (change to file:/path/to/custom.csv for external files)
+app.dataset.path=classpath:data/queries_aggregated.csv
 ```
 
 ---
 
-## 🔑 Key Design Decisions
+## Project Status
 
-### Consistent Hashing (Phase 6)
-- **Hash function:** MD5 (stable, uniform distribution; cryptographic strength not needed)
-- **Virtual nodes:** 160 per physical node = 480 ring positions total
-  - Provides ~5–10% standard deviation in key distribution across 3 nodes
-  - Same default used by Memcached and Jedis
-- **Deterministic routing:** `suggest:basic:iph` always maps to the same Redis node on every request
-
-### Exponential Decay Ranking (Phase 8)
-- **Formula:** `score = count × e^(−0.0289 × hours_elapsed)`
-- **Half-life:** 24 hours — a query not searched in 24h retains 50% of its score
-- **Computed in PostgreSQL** using `EXP()` and `EXTRACT(EPOCH FROM ...)` at query time
-- Basic and trending results use **separate cache keys** (`suggest:basic:*` vs `suggest:trending:*`) so they never bleed into each other
-
-### Batch Write Buffer (Phase 9)
-- **Buffer:** `AtomicReference<ConcurrentHashMap<String, BufferedEntry>>`
-- **Atomic drain:** `getAndSet(new ConcurrentHashMap<>())` — the live map is swapped in a single CAS operation; no locks held during DB writes
-- **Double-flush safety:** `flush()` is `synchronized` — size-based and time-based triggers can never process the same entries twice
-- **Known trade-off:** Entries in the buffer at crash time are lost (no WAL/durable queue). Documented in `SearchBuffer.java`.
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | Spring Boot project skeleton + PostgreSQL JPA entity | ✅ Complete |
+| 2 | CSV dataset loader (1.24M+ rows, batch insert 10k/chunk) | ✅ Complete |
+| 3 | `GET /suggest` — prefix search, `count DESC`, top 10 | ✅ Complete |
+| 4 | `POST /search` — atomic PostgreSQL UPSERT (insert or increment) | ✅ Complete |
+| 5 | Redis cache-aside on `/suggest` (single node, 60 s TTL) | ✅ Complete |
+| 6 | 3-node Redis + consistent hashing (MD5, 160 vnodes/node) | ✅ Complete |
+| 7 | React frontend (Google-style UI, debounce, keyboard nav) | ✅ Complete |
+| 8 | Trending mode — exponential decay scoring (`λ=0.0289`, 24 h half-life) | ✅ Complete |
+| 9 | Batch writes — in-memory buffer + `@Scheduled` flush, write-reduction metrics | ✅ Complete |
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
-| Problem | Likely Cause | Fix |
+| Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| `Connection refused` on startup | Docker containers not running | `docker-compose up -d` |
-| `Port 8081 already in use` | Another process on 8081 | Kill it or change `server.port` in `application.properties` |
-| `/suggest` returns empty list | Dataset not loaded | Check logs for "Data load complete" on first boot |
-| Cache always MISS | Redis containers stopped | `docker ps` and restart containers |
-| Frontend shows "Something went wrong" | Backend not running | Start backend with `mvn spring-boot:run` |
-| `mvn` not found | Maven not installed or not in PATH | Install Maven or use `./mvnw` |
-
----
-
-## 📜 License
-
-This project is for academic/educational purposes as part of an HLD (High-Level Design) course assignment.
+| `Connection refused` on backend start | Docker containers not running | `docker-compose up -d` |
+| `Port 8081 already in use` | Another process on 8081 | Kill it or edit `server.port` in `application.properties` |
+| `/suggest` returns `[]` for any prefix | Dataset not loaded | Look for `"Data load complete"` in backend log; if absent, check that the CSV file exists in `src/main/resources/data/` |
+| `X-Cache` always `MISS` | Redis containers stopped | `docker ps`; restart with `docker-compose up -d` |
+| Frontend shows "Something went wrong" | Backend not running | Run `mvn spring-boot:run` in `backend/` |
+| Trending scores all very small | `last_searched_at` values in the dataset are old | Run `POST /search` for those queries to update their timestamps, then wait 10 s for a flush |
