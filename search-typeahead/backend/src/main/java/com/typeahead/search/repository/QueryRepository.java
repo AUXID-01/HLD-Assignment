@@ -18,7 +18,22 @@ public interface QueryRepository extends JpaRepository<Query, Long> {
         Long getCount();
     }
 
+    interface TrendingProjection {
+        String getQuery();
+        Long getCount();
+        Double getScore();
+    }
+
     List<SuggestProjection> findTop10ByQueryStartingWithIgnoreCaseOrderByCountDesc(String prefix);
+
+    @org.springframework.data.jpa.repository.Query(nativeQuery = true, value = 
+        "SELECT query, count, " +
+        "(count * EXP(-0.0289 * (EXTRACT(EPOCH FROM (NOW() - last_searched_at)) / 3600.0))) AS score " +
+        "FROM queries " +
+        "WHERE UPPER(query) LIKE UPPER(CONCAT(:prefix, '%')) " +
+        "ORDER BY score DESC " +
+        "LIMIT 10")
+    List<TrendingProjection> findTrendingSuggestions(@Param("prefix") String prefix);
 
     @Modifying
     @Transactional

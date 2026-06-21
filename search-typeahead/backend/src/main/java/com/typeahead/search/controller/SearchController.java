@@ -43,7 +43,9 @@ public class SearchController {
         // Each prefix can live on a DIFFERENT node, so we must route per-key.
         List<String> prefixes = new ArrayList<>();
         for (int i = 1; i <= queryStr.length(); i++) {
-            prefixes.add("suggest:" + queryStr.substring(0, i));
+            String prefix = queryStr.substring(0, i);
+            prefixes.add("suggest:basic:" + prefix);
+            prefixes.add("suggest:trending:" + prefix);
         }
 
         // Group deletes by node to minimize round-trips

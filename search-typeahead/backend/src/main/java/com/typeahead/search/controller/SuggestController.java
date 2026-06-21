@@ -30,13 +30,22 @@ public class SuggestController {
     }
 
     @GetMapping("/suggest")
-    public ResponseEntity<List<SuggestResponse>> suggest(@RequestParam(name = "q", required = false) String prefix) {
+    public ResponseEntity<List<SuggestResponse>> suggest(
+            @RequestParam(name = "q", required = false) String prefix,
+            @RequestParam(name = "mode", defaultValue = "basic") String mode) {
+        
         if (prefix == null || prefix.trim().isEmpty()) {
             return ResponseEntity.ok().header("X-Cache", "MISS").body(Collections.emptyList());
         }
 
         String normalizedPrefix = prefix.trim().toLowerCase();
-        String redisKey = "suggest:" + normalizedPrefix;
+        
+        // Mode validation (fallback to basic if unknown)
+        if (!mode.equals("trending")) {
+            mode = "basic";
+        }
+        
+        String redisKey = "suggest:" + mode + ":" + normalizedPrefix;
 
         // Route to the deterministically correct node via the consistent hash ring
         StringRedisTemplate template = hashRouter.getTemplateForKey(redisKey);
@@ -55,10 +64,19 @@ public class SuggestController {
             // Ignore cache read errors and fallback to DB
         }
 
-        List<SuggestResponse> dbResults = queryRepository.findTop10ByQueryStartingWithIgnoreCaseOrderByCountDesc(normalizedPrefix)
-                .stream()
-                .map(p -> new SuggestResponse(p.getQuery(), p.getCount()))
-                .collect(Collectors.toList());
+        List<SuggestResponse> dbResults;
+        if (mode.equals("trending")) {
+            dbResults = queryRepository.findTrendingSuggestions(normalizedPrefix)
+                    .stream()
+                    .map(p -> new SuggestResponse(p.getQuery(), p.getCount(), p.getScore()))
+                    .collect(Collectors.toList());
+        } else {
+            // basic mode: no score
+            dbResults = queryRepository.findTop10ByQueryStartingWithIgnoreCaseOrderByCountDesc(normalizedPrefix)
+                    .stream()
+                    .map(p -> new SuggestResponse(p.getQuery(), p.getCount(), null))
+                    .collect(Collectors.toList());
+        }
 
         try {
             String json = objectMapper.writeValueAsString(dbResults);

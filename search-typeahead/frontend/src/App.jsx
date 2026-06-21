@@ -9,6 +9,7 @@ function App() {
   const [message, setMessage] = useState(null)
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const [showDropdown, setShowDropdown] = useState(false)
+  const [mode, setMode] = useState('basic')
 
   const debounceTimer = useRef(null)
   const inputRef = useRef(null)
@@ -29,7 +30,7 @@ function App() {
 
     debounceTimer.current = setTimeout(async () => {
       try {
-        const response = await fetch(`http://localhost:8080/suggest?q=${encodeURIComponent(query)}`)
+        const response = await fetch(`http://localhost:8081/suggest?q=${encodeURIComponent(query)}&mode=${mode}`)
         if (!response.ok) {
           throw new Error('Network response was not ok')
         }
@@ -46,13 +47,13 @@ function App() {
     }, 300)
 
     return () => clearTimeout(debounceTimer.current)
-  }, [query])
+  }, [query, mode])
 
   const handleSearch = async (searchQuery) => {
     if (!searchQuery.trim()) return
 
     try {
-      const response = await fetch('http://localhost:8080/search', {
+      const response = await fetch('http://localhost:8081/search', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -123,6 +124,11 @@ function App() {
         <span className="logo-e">e</span>
       </div>
       
+      <div className="mode-toggle">
+        <button className={mode === 'basic' ? 'active' : ''} onClick={() => setMode('basic')}>Basic Mode</button>
+        <button className={mode === 'trending' ? 'active' : ''} onClick={() => setMode('trending')}>Trending Mode</button>
+      </div>
+
       <div className={`search-wrapper ${showDropdown && query.trim() !== '' ? 'dropdown-active' : ''}`} ref={inputRef}>
         <div className="search-input-container">
           <svg className="search-icon" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -172,7 +178,10 @@ function App() {
                     <span className="sugg-match">{sugg.query.substring(0, query.length)}</span>
                     <span>{sugg.query.substring(query.length)}</span>
                   </div>
-                  <span className="sugg-count">{sugg.count}</span>
+                  {sugg.score != null ? (
+                    <span className="sugg-score">⭐ {sugg.score.toFixed(2)}</span>
+                  ) : null}
+                  <span className="sugg-count">({sugg.count})</span>
                 </li>
               ))}
             </ul>

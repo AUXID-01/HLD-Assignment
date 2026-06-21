@@ -138,9 +138,43 @@ body {
   font-weight: bold;
 }
 
+.mode-toggle {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.mode-toggle button {
+  background-color: transparent;
+  border: 1px solid #dfe1e5;
+  color: #5f6368;
+  padding: 8px 16px;
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.mode-toggle button.active {
+  background-color: #e8f0fe;
+  color: #1a73e8;
+  border-color: #e8f0fe;
+  font-weight: bold;
+}
+
+.mode-toggle button:hover:not(.active) {
+  background-color: #f8f9fa;
+}
+
 .sugg-count {
   color: #888;
   font-size: 13px;
+  margin-left: 8px;
+}
+
+.sugg-score {
+  color: #ea4335;
+  font-size: 13px;
+  font-weight: bold;
   margin-left: 10px;
 }
 
